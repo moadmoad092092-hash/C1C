@@ -1,0 +1,7 @@
+{
+  "name": "site-to-app-simple",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local website-to-Android APK builder using a real WebView project",
+  "scripts": { "start": "node server.js" }
+}

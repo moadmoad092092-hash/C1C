@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>تحويل الموقع إلى تطبيق</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="page">
+    <section class="panel">
+      <div class="logo" aria-hidden="true">↗</div>
+      <h1>تحويل الموقع إلى تطبيق</h1>
+      <p class="subtitle">أدخل اسم التطبيق ورابط موقعك للبدء.</p>
+
+      <form id="convertForm">
+        <label for="appName">اسم التطبيق</label>
+        <input id="appName" type="text" placeholder="مثال: تطبيقي" maxlength="50" required>
+
+        <label for="siteUrl">رابط الموقع</label>
+        <input id="siteUrl" type="url" placeholder="https://example.com" required>
+
+        <button id="convertBtn" type="submit">تحويل</button>
+      </form>
+
+      <section class="status-box" aria-live="polite">
+        <div class="status-heading">
+          <strong>حالة التطبيق</strong>
+          <span id="percent">—</span>
+        </div>
+        <div class="progress-track"><div id="progressBar"></div></div>
+        <p id="statusText">بانتظار إدخال البيانات.</p>
+        <p id="timeText" class="time-text"></p>
+        <a id="downloadLink" class="download-link" hidden download>تنزيل APK</a>
+      </section>
+
+      <p class="note">يتم بناء تطبيق Android حقيقي باستخدام WebView، ولن يظهر زر التنزيل إلا بعد نجاح عملية البناء والتحقق من ملف APK.</p>
+    </section>
+    <footer>بسيط • مجاني • مناسب للهاتف</footer>
+  </main>
+  <script src="config.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
