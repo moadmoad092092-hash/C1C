@@ -8,7 +8,7 @@ const statusText = document.getElementById('statusText');
 const timeText = document.getElementById('timeText');
 const downloadLink = document.getElementById('downloadLink');
 const API_BASE = String(window.SITE_TO_APP_API_BASE || '').replace(/\/+$/, '');
-let pollTimer;
+let activeDownloadUrl = '';
 
 function apiUrl(path) {
   return `${API_BASE}${path}`;
@@ -19,50 +19,82 @@ function showStatus(job) {
   progressBar.style.width = value === null ? '0%' : `${value}%`;
   percent.textContent = value === null ? '—' : `${value}%`;
   statusText.textContent = job.error || job.message || 'جارٍ البناء...';
-  timeText.textContent = job.elapsedSeconds ? `الوقت المنقضي: ${job.elapsedSeconds} ثانية${job.remainingSeconds ? ` • المتبقي تقريبًا: ${job.remainingSeconds} ثانية` : ''}` : '';
-  if (job.state === 'success' && job.downloadUrl) {
-    downloadLink.href = /^https?:\/\//i.test(job.downloadUrl) ? job.downloadUrl : apiUrl(job.downloadUrl);
-    downloadLink.hidden = false;
-  } else {
-    downloadLink.hidden = true;
-  }
+  timeText.textContent = job.elapsedSeconds
+    ? `الوقت المنقضي: ${job.elapsedSeconds} ثانية${job.remainingSeconds ? ` • المتبقي تقريبًا: ${job.remainingSeconds} ثانية` : ''}`
+    : '';
 }
 
-async function readJson(response) {
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    if (/^\s*<!doctype html|^\s*<html/i.test(text)) {
-      throw new Error('عنوان خادم البناء غير صحيح: استضاف GitHub Pages صفحة HTML بدل استجابة JSON. اضبط config.js على عنوان خادم Node.js فعلي.');
-    }
-    throw new Error('استجابة خادم البناء غير صالحة.');
-  }
+function clearDownload() {
+  downloadLink.hidden = true;
+  downloadLink.removeAttribute('download');
+  if (activeDownloadUrl) URL.revokeObjectURL(activeDownloadUrl);
+  activeDownloadUrl = '';
 }
 
-async function pollJob(id) {
-  try {
-    const response = await fetch(apiUrl(`/api/build/${encodeURIComponent(id)}`), { cache: 'no-store' });
-    const job = await readJson(response);
-    if (!response.ok) throw new Error(job.error || 'تعذر قراءة حالة البناء من الخادم.');
-    showStatus(job);
-    if (job.state === 'queued' || job.state === 'building') {
-      pollTimer = window.setTimeout(() => pollJob(id), 1000);
+function offerApk(fileName, contentBase64) {
+  const binary = atob(contentBase64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  activeDownloadUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/vnd.android.package-archive' }));
+  downloadLink.href = activeDownloadUrl;
+  downloadLink.download = fileName || 'app.apk';
+  downloadLink.hidden = false;
+}
+
+function parseSseBlock(block) {
+  const data = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('');
+  return data ? JSON.parse(data) : null;
+}
+
+async function consumeBuildStream(response) {
+  if (!response.ok) {
+    const text = await response.text();
+    try { throw new Error(JSON.parse(text).error || 'تعذر بدء البناء.'); }
+    catch (error) { throw error instanceof SyntaxError ? new Error('استجابة خادم البناء غير صالحة.') : error; }
+  }
+  if (!response.body) throw new Error('المتصفح لا يدعم متابعة بناء APK المباشر.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let receivedApk = false;
+  let completed = false;
+
+  const handle = payload => {
+    if (!payload) return;
+    if (payload.type === 'status') {
+      showStatus(payload.job);
       return;
     }
-    button.disabled = false;
-    button.textContent = 'تحويل';
-  } catch (error) {
-    showStatus({ percent: null, message: error.message });
-    button.disabled = false;
-    button.textContent = 'تحويل';
+    if (payload.type === 'apk') {
+      offerApk(payload.fileName, payload.contentBase64);
+      receivedApk = true;
+      return;
+    }
+    if (payload.type === 'error') {
+      showStatus(payload.job);
+      throw new Error(payload.job?.error || 'فشل بناء APK.');
+    }
+    if (payload.type === 'complete') completed = true;
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    let separator;
+    while ((separator = buffer.indexOf('\n\n')) !== -1) {
+      const block = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      if (!block.startsWith(':')) handle(parseSseBlock(block));
+    }
+    if (done) break;
   }
+  if (!completed || !receivedApk) throw new Error('انتهى اتصال البناء قبل استلام ملف APK.');
 }
 
-form.addEventListener('submit', async (event) => {
+form.addEventListener('submit', async event => {
   event.preventDefault();
-  window.clearTimeout(pollTimer);
-  downloadLink.hidden = true;
+  clearDownload();
   const appName = nameInput.value.trim();
   const siteUrl = urlInput.value.trim();
   if (!appName || !siteUrl) {
@@ -78,23 +110,25 @@ form.addEventListener('submit', async (event) => {
     return;
   }
   if (!API_BASE && /(^|\.)github\.io$/i.test(window.location.hostname)) {
-    showStatus({ percent: null, message: 'لم يتم ربط خادم بناء APK بالموقع المنشور. استضافة GitHub Pages ثابتة ولا تشغّل Node.js أو Gradle. اضبط عنوان الخادم في config.js.' });
+    showStatus({ percent: null, message: 'لم يتم ربط خادم بناء APK بالموقع المنشور.' });
     return;
   }
+
   button.disabled = true;
   button.textContent = 'جارٍ البناء...';
   showStatus({ percent: 0, message: 'جارٍ إرسال طلب بناء APK حقيقي...' });
   try {
     const response = await fetch(apiUrl('/api/build'), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ appName, siteUrl })
     });
-    const job = await readJson(response);
-    if (!response.ok) throw new Error(job.error || 'تعذر بدء البناء.');
-    showStatus(job);
-    pollJob(job.id);
+    await consumeBuildStream(response);
+    showStatus({ percent: 100, message: 'تم إنشاء APK والتحقق من الملف بنجاح.', elapsedSeconds: 1 });
   } catch (error) {
-    showStatus({ percent: null, message: error.name === 'TypeError' ? 'تعذر الاتصال بخادم البناء. تحقق من عنوانه ومن إعداد CORS.' : error.message });
+    clearDownload();
+    showStatus({ percent: null, message: error.name === 'TypeError' ? 'تعذر الاتصال بخادم البناء.' : error.message });
+  } finally {
     button.disabled = false;
     button.textContent = 'تحويل';
   }
